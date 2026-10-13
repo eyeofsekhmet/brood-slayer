@@ -1,0 +1,596 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Broodmother - Mobile Portrait Prototype v9</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body { background-color: #050505; color: white; display: flex; flex-direction: column; align-items: center; font-family: sans-serif; margin: 0; padding: 0; overflow: hidden; touch-action: none; height: 100vh; width: 100vw; }
+        
+        #gameContainer { position: relative; width: 100%; height: 100%; max-width: 600px; aspect-ratio: 9/16; background-color: #111; overflow: hidden; }
+        @media (min-aspect-ratio: 9/16) {
+            #gameContainer { height: 100vh; width: calc(100vh * 9 / 16); }
+        }
+        
+        canvas { display: block; width: 100%; height: 100%; box-shadow: 0 0 30px rgba(0, 255, 100, 0.1); }
+        
+        #ui { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; font-size: 16px; font-weight: bold; text-shadow: 1px 1px 2px #000; z-index: 5; pointer-events: none; }
+        
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.85); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 10; }
+        .overlay h1 { font-size: 36px; color: #0df; margin-bottom: 10px; text-shadow: 0 0 10px #0df; text-align: center; }
+        .overlay p { font-size: 16px; margin-bottom: 30px; text-align: center; max-width: 80%; line-height: 1.5; color: #ccc; }
+        .overlay button { padding: 15px 30px; font-size: 20px; font-weight: bold; background: #0f5; color: #111; border: none; border-radius: 8px; cursor: pointer; transition: transform 0.2s; box-shadow: 0 5px 15px rgba(0,255,85,0.4); margin-bottom: 15px; width: 80%; max-width: 300px; }
+        .overlay button:hover { transform: scale(1.05); }
+
+        .upgrade-btn { background: #222 !important; color: #fff !important; border: 2px solid #0df !important; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px !important; }
+        .upgrade-btn:hover { background: #0df !important; color: #000 !important; }
+
+        /* Wave Announcer */
+        #wavePrompt { display: none; position: absolute; top: 30%; width: 100%; text-align: center; z-index: 20; pointer-events: none; transition: opacity 0.5s ease-in-out; }
+        #wavePrompt h1 { font-size: 48px; color: #0df; text-shadow: 0 0 15px #0df; margin: 0; text-transform: uppercase; }
+        #wavePrompt p { font-size: 24px; color: #fff; margin-top: 10px; text-shadow: 0 0 5px #000; }
+
+        /* Virtual Joystick UI */
+        #joystickArea { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; }
+        #joystickBase { position: absolute; width: 100px; height: 100px; border-radius: 50%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); display: none; transform: translate(-50%, -50%); pointer-events: none; }
+        #joystickKnob { position: absolute; width: 40px; height: 40px; border-radius: 50%; background: rgba(0, 221, 255, 0.5); display: none; transform: translate(-50%, -50%); pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="ui">
+            <div style="color: #ff0;">Eggs: <span id="eggCount">5</span></div>
+            <div style="color: #0df;">Wave: <span id="waveDisplay">1</span></div>
+            <div style="color: #fff;">Score: <span id="score">0</span></div>
+        </div>
+        
+        <canvas id="gameCanvas" width="900" height="1600"></canvas>
+        
+        <div id="joystickArea"></div>
+        <div id="joystickBase"></div>
+        <div id="joystickKnob"></div>
+        
+        <!-- Wave Transition Overlay -->
+        <div id="wavePrompt">
+            <h1 id="waveText">Wave 1</h1>
+            <p id="waveSubText">Get Ready</p>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="startScreen" class="overlay">
+            <h1>Broodmother</h1>
+            <p><b>Mobile:</b> Touch and drag anywhere to move.<br><b>Desktop:</b> WASD / Arrows.<br><br>Survive the waves. Pick upgrades.<br>Retrieve stolen eggs!</p>
+            <button onclick="startGame()">Start Game</button>
+        </div>
+
+        <!-- Upgrade Screen -->
+        <div id="upgradeScreen" class="overlay" style="display: none; background: rgba(0, 0, 0, 0.95);">
+            <h1 style="color: #0f5;">Wave Cleared!</h1>
+            <p style="margin-bottom: 20px;">Choose an upgrade for the next wave:</p>
+            <div id="upgradeCards" style="display: flex; flex-direction: column; width: 100%; align-items: center;">
+                <!-- Buttons injected by JS -->
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameOverScreen" class="overlay" style="display: none;">
+            <h1 style="color: #f44; text-shadow: 0 0 10px #f44;">Nest Destroyed</h1>
+            <p>Score: <span id="finalScore" style="font-weight: bold; color: #ff0; font-size: 24px;">0</span><br>Wave reached: <span id="finalWave" style="color: #0df;">1</span></p>
+            <button onclick="location.reload()">Restart Game</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const eggUi = document.getElementById('eggCount');
+        const scoreUi = document.getElementById('score');
+        const waveUi = document.getElementById('waveDisplay');
+        
+        // Game State
+        let gameState = 'START'; 
+        const base = { x: 450, y: 1200, radius: 45, eggs: 5 }; 
+        const player = { x: 450, y: 1100, radius: 14, eggsCarried: 0, shootTimer: 0 };
+        
+        // Upgradable Player Stats
+        let stats = {
+            damage: 1,
+            fireRateMax: 40, 
+            speed: 1.4,      // NERF: Reduced base movement from 1.8 to 1.4 for tighter control
+            range: 300
+        };
+
+        // Wave Configuration
+        let currentWave = 1;
+        let isEndless = false;
+        let spawningActive = false;
+        let enemiesSpawnedThisWave = 0;
+        let targetEnemiesThisWave = 15;
+
+        let bullets = [];
+        let enemies = [];
+        let droppedEggs = [];
+        let score = 0;
+        let frameCount = 0;
+
+        const upgradePool = [
+            { name: 'Heavy Caliber', desc: '+1 Damage', apply: () => stats.damage += 1 },
+            { name: 'Rapid Fire', desc: 'Shoot 10% Faster', apply: () => stats.fireRateMax = Math.max(15, stats.fireRateMax * 0.9) },
+            { name: 'Long Barrel', desc: '+25% Range', apply: () => stats.range *= 1.25 },
+            { name: 'Lightweight Boots', desc: '+10% Move Speed', apply: () => stats.speed *= 1.1 },
+            { name: 'Fortify Nest', desc: '+1 Max Egg', apply: () => { base.eggs++; eggUi.innerText = base.eggs; } }
+        ];
+
+        // Lanes (5 Angles radiating upwards and sideways)
+        const lanes = [
+            { angle: -Math.PI * 0.1, length: 1800, isBoss: false }, 
+            { angle: -Math.PI * 0.3, length: 1800, isBoss: false }, 
+            { angle: -Math.PI * 0.5, length: 1300, isBoss: true },  
+            { angle: -Math.PI * 0.7, length: 1800, isBoss: false }, 
+            { angle: -Math.PI * 0.9, length: 1800, isBoss: false }  
+        ];
+        const subLaneOffsets = [-35, 0, 35];
+
+        // Input Handling
+        let keys = {};
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        // Virtual Joystick
+        const touchArea = document.getElementById('joystickArea');
+        const joyBase = document.getElementById('joystickBase');
+        const joyKnob = document.getElementById('joystickKnob');
+        let joystick = { active: false, dx: 0, dy: 0, originX: 0, originY: 0, maxDist: 50 };
+
+        function updateJoystick(e) {
+            if (!joystick.active) return;
+            e.preventDefault();
+            let touch = e.touches ? e.touches[0] : e;
+            const rect = touchArea.getBoundingClientRect();
+            
+            let currentX = touch.clientX - rect.left;
+            let currentY = touch.clientY - rect.top;
+            
+            let dx = currentX - joystick.originX;
+            let dy = currentY - joystick.originY;
+            let dist = Math.hypot(dx, dy);
+            
+            if (dist > joystick.maxDist) {
+                dx = (dx / dist) * joystick.maxDist;
+                dy = (dy / dist) * joystick.maxDist;
+            }
+            
+            joyKnob.style.left = (joystick.originX + dx) + 'px';
+            joyKnob.style.top = (joystick.originY + dy) + 'px';
+            
+            let maxInput = dist > 0 ? Math.min(dist, joystick.maxDist) / joystick.maxDist : 0;
+            if (dist > 0) {
+                joystick.dx = (dx / dist) * maxInput;
+                joystick.dy = (dy / dist) * maxInput;
+            } else {
+                joystick.dx = 0; joystick.dy = 0;
+            }
+        }
+
+        touchArea.addEventListener('mousedown', startJoy);
+        touchArea.addEventListener('touchstart', startJoy, {passive: false});
+        window.addEventListener('mousemove', updateJoystick);
+        window.addEventListener('touchmove', updateJoystick, {passive: false});
+        window.addEventListener('mouseup', endJoy);
+        window.addEventListener('touchend', endJoy);
+
+        function startJoy(e) {
+            if (gameState !== 'PLAYING') return;
+            e.preventDefault();
+            let touch = e.touches ? e.touches[0] : e;
+            const rect = touchArea.getBoundingClientRect();
+            
+            joystick.active = true;
+            joystick.originX = touch.clientX - rect.left;
+            joystick.originY = touch.clientY - rect.top;
+            
+            joyBase.style.display = 'block';
+            joyKnob.style.display = 'block';
+            joyBase.style.left = joystick.originX + 'px';
+            joyBase.style.top = joystick.originY + 'px';
+            joyKnob.style.left = joystick.originX + 'px';
+            joyKnob.style.top = joystick.originY + 'px';
+        }
+
+        function endJoy() {
+            joystick.active = false;
+            joystick.dx = 0; joystick.dy = 0;
+            joyBase.style.display = 'none';
+            joyKnob.style.display = 'none';
+        }
+
+        // Game Flow
+        window.startGame = function() {
+            document.getElementById('startScreen').style.display = 'none';
+            resetToWave1();
+            startWaveTransition();
+        }
+
+        function resetToWave1() {
+            base.eggs = 5;
+            score = 0;
+            currentWave = 1;
+            isEndless = false;
+            stats = { damage: 1, fireRateMax: 40, speed: 1.4, range: 300 }; // Updated speed
+            
+            eggUi.innerText = base.eggs;
+            scoreUi.innerText = score;
+            waveUi.innerText = currentWave;
+            
+            player.x = 450;
+            player.y = 1100;
+            player.eggsCarried = 0;
+            enemies = [];
+            bullets = [];
+            droppedEggs = [];
+            endJoy();
+        }
+
+        function startWaveTransition() {
+            gameState = 'TRANSITION';
+            endJoy();
+            keys = {}; 
+            document.getElementById('upgradeScreen').style.display = 'none';
+            
+            targetEnemiesThisWave = 10 + (currentWave * 5); 
+            // Wave 3 Ramp Up: Add a few extra enemies to the spawn pool
+            if (currentWave >= 3 && !isEndless) targetEnemiesThisWave += 5;
+            
+            enemiesSpawnedThisWave = 0;
+            
+            let prompt = document.getElementById('wavePrompt');
+            let text = document.getElementById('waveText');
+            let subText = document.getElementById('waveSubText');
+            
+            prompt.style.display = 'block';
+            prompt.style.opacity = 1;
+            
+            if (isEndless) {
+                text.innerText = "ENDLESS MODE";
+                subText.innerText = "Survive.";
+                waveUi.innerText = "ENDLESS";
+            } else {
+                text.innerText = `WAVE ${currentWave}`;
+                subText.innerText = currentWave === 5 ? "Final Stand" : "Get Ready";
+                waveUi.innerText = currentWave;
+            }
+
+            // Countdown to play
+            setTimeout(() => {
+                prompt.style.opacity = 0;
+                setTimeout(() => {
+                    prompt.style.display = 'none';
+                    gameState = 'PLAYING';
+                    spawningActive = true;
+                }, 500);
+            }, 2000);
+        }
+
+        function checkWaveEnd() {
+            if (isEndless) return;
+            if (spawningActive && enemiesSpawnedThisWave >= targetEnemiesThisWave) {
+                spawningActive = false;
+            }
+            if (!spawningActive && enemies.length === 0 && droppedEggs.length === 0 && player.eggsCarried === 0) {
+                showUpgradeScreen();
+            }
+        }
+
+        function showUpgradeScreen() {
+            gameState = 'UPGRADE';
+            endJoy();
+            keys = {};
+            
+            let shuffled = [...upgradePool].sort(() => 0.5 - Math.random());
+            let selected = shuffled.slice(0, 3);
+            
+            let container = document.getElementById('upgradeCards');
+            container.innerHTML = '';
+            
+            selected.forEach(upg => {
+                let btn = document.createElement('button');
+                btn.className = 'upgrade-btn';
+                btn.innerHTML = `<strong style="font-size: 24px; color: #0df;">${upg.name}</strong><span style="font-size: 16px; margin-top: 5px; color: #ddd;">${upg.desc}</span>`;
+                btn.onclick = () => {
+                    upg.apply();
+                    currentWave++;
+                    if (currentWave > 5) isEndless = true;
+                    startWaveTransition();
+                };
+                container.appendChild(btn);
+            });
+            
+            document.getElementById('upgradeScreen').style.display = 'flex';
+        }
+
+        function triggerGameOver() {
+            gameState = 'GAMEOVER';
+            endJoy();
+            document.getElementById('gameOverScreen').style.display = 'flex';
+            document.getElementById('finalScore').innerText = score;
+            document.getElementById('finalWave').innerText = isEndless ? "Endless" : currentWave;
+        }
+
+        function spawnEnemy() {
+            if (!spawningActive) return;
+
+            const lane = lanes[Math.floor(Math.random() * lanes.length)];
+            const dist = lane.isBoss ? 800 : 1200; 
+            const subLaneOffset = subLaneOffsets[Math.floor(Math.random() * subLaneOffsets.length)];
+            const perpAngle = lane.angle + Math.PI/2;
+            
+            // Wave 3 Ramp Up: Higher boss spawn chance on the boss lane
+            let bossChance = currentWave >= 3 ? 0.6 : 0.4;
+            let makeBoss = lane.isBoss && Math.random() < bossChance;
+            
+            // Wave 3 Ramp Up: Base HP scales up by 25% starting at wave 3
+            let normalScale = (currentWave >= 3 && !isEndless) ? (1 + (currentWave - 2) * 0.25) : 1;
+            let hpScale = isEndless ? (1.75 + (currentWave - 5) * 0.2) : normalScale;
+
+            enemies.push({
+                x: base.x + Math.cos(lane.angle) * dist + Math.cos(perpAngle) * subLaneOffset,
+                y: base.y + Math.sin(lane.angle) * dist + Math.sin(perpAngle) * subLaneOffset,
+                radius: makeBoss ? 18 : 12,
+                hp: Math.ceil((makeBoss ? 25 : 2) * hpScale), 
+                maxHp: Math.ceil((makeBoss ? 25 : 2) * hpScale),
+                speed: makeBoss ? 0.22 : 0.4,
+                laneAngle: lane.angle,
+                hasEgg: false,
+                isBoss: makeBoss,
+                color: makeBoss ? '#f0f' : '#f44',
+                perpOffset: { x: Math.cos(perpAngle) * subLaneOffset, y: Math.sin(perpAngle) * subLaneOffset }
+            });
+
+            enemiesSpawnedThisWave++;
+        }
+
+        function update() {
+            if (gameState !== 'PLAYING') return;
+
+            checkWaveEnd();
+
+            // Movement Penalties
+            let speedMultiplier = Math.pow(0.7, player.eggsCarried);
+            let currentSpeed = stats.speed * speedMultiplier;
+            
+            let moveX = 0; let moveY = 0;
+
+            if (keys['KeyW'] || keys['ArrowUp']) moveY -= 1;
+            if (keys['KeyS'] || keys['ArrowDown']) moveY += 1;
+            if (keys['KeyA'] || keys['ArrowLeft']) moveX -= 1;
+            if (keys['KeyD'] || keys['ArrowRight']) moveX += 1;
+
+            if (moveX !== 0 || moveY !== 0) {
+                let dist = Math.hypot(moveX, moveY);
+                moveX = (moveX / dist); moveY = (moveY / dist);
+            } else if (joystick.active) {
+                moveX = joystick.dx; moveY = joystick.dy;
+            }
+
+            player.x += moveX * currentSpeed;
+            player.y += moveY * currentSpeed;
+            
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+
+            // Base Return
+            const distToBase = Math.hypot(player.x - base.x, player.y - base.y);
+            if (distToBase < base.radius && player.eggsCarried > 0) {
+                base.eggs += player.eggsCarried;
+                player.eggsCarried = 0;
+                eggUi.innerText = base.eggs;
+            }
+
+            // Shooting
+            player.shootTimer++;
+            if (player.shootTimer > stats.fireRateMax && enemies.length > 0) {
+                let nearest = null;
+                let minDist = Infinity;
+                enemies.forEach(e => {
+                    let d = Math.hypot(player.x - e.x, player.y - e.y);
+                    if (d < minDist) { minDist = d; nearest = e; }
+                });
+                
+                if (nearest && minDist < stats.range) {
+                    const angle = Math.atan2(nearest.y - player.y, nearest.x - player.x);
+                    bullets.push({ 
+                        x: player.x, y: player.y, 
+                        startX: player.x, startY: player.y, 
+                        vx: Math.cos(angle)*8, vy: Math.sin(angle)*8 
+                    });
+                    player.shootTimer = 0;
+                }
+            }
+
+            // Bullets Update
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].x += bullets[i].vx;
+                bullets[i].y += bullets[i].vy;
+                
+                const distTraveled = Math.hypot(bullets[i].x - bullets[i].startX, bullets[i].y - bullets[i].startY);
+                if (distTraveled > stats.range || bullets[i].x < 0 || bullets[i].x > canvas.width || bullets[i].y < 0 || bullets[i].y > canvas.height) {
+                    bullets.splice(i, 1);
+                }
+            }
+
+            // Enemies Update
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
+                let distToNest = Math.hypot(e.x - (base.x + e.perpOffset.x), e.y - (base.y + e.perpOffset.y));
+
+                if (!e.hasEgg) {
+                    e.x -= Math.cos(e.laneAngle) * e.speed;
+                    e.y -= Math.sin(e.laneAngle) * e.speed;
+                    
+                    if (Math.hypot(e.x - base.x, e.y - base.y) < base.radius + 15 && base.eggs > 0) {
+                        e.hasEgg = true;
+                        base.eggs--;
+                        eggUi.innerText = base.eggs;
+                    }
+                } else {
+                    e.x += Math.cos(e.laneAngle) * (e.speed * 0.5); 
+                    e.y += Math.sin(e.laneAngle) * (e.speed * 0.5);
+                    
+                    if (Math.hypot(e.x - base.x, e.y - base.y) > 1500) {
+                        enemies.splice(i, 1);
+                        if (base.eggs <= 0 && droppedEggs.length === 0 && player.eggsCarried === 0) {
+                            triggerGameOver();
+                        }
+                        continue;
+                    }
+                }
+
+                // Bullet Hit Detection
+                for (let j = bullets.length - 1; j >= 0; j--) {
+                    let b = bullets[j];
+                    if (Math.hypot(e.x - b.x, e.y - b.y) < e.radius + 5) {
+                        bullets.splice(j, 1);
+                        e.hp -= stats.damage; 
+                        if (e.hp <= 0) {
+                            if (e.hasEgg) droppedEggs.push({ x: e.x, y: e.y });
+                            enemies.splice(i, 1);
+                            score += e.isBoss ? 50 : 10;
+                            scoreUi.innerText = score;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Egg Pickup
+            for (let i = droppedEggs.length - 1; i >= 0; i--) {
+                if (Math.hypot(player.x - droppedEggs[i].x, player.y - droppedEggs[i].y) < player.radius + 10) {
+                    player.eggsCarried++;
+                    droppedEggs.splice(i, 1);
+                }
+            }
+
+            // Spawner Logic
+            frameCount++;
+            let baseInterval = isEndless ? Math.max(15, 60 - (currentWave * 2)) : Math.max(30, 80 - (currentWave * 10));
+            if (frameCount % baseInterval === 0 && spawningActive) spawnEnemy();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Sub-Lanes
+            ctx.lineWidth = 2;
+            lanes.forEach(l => {
+                const perp = l.angle + Math.PI/2;
+                subLaneOffsets.forEach(offset => {
+                    ctx.beginPath();
+                    let startX = base.x + Math.cos(perp)*offset;
+                    let startY = base.y + Math.sin(perp)*offset;
+                    ctx.moveTo(startX, startY);
+                    ctx.lineTo(startX + Math.cos(l.angle)*2000, startY + Math.sin(l.angle)*2000);
+                    ctx.strokeStyle = l.isBoss ? 'rgba(255, 60, 60, 0.15)' : 'rgba(100, 100, 100, 0.15)';
+                    ctx.stroke();
+                });
+            });
+
+            // Draw Base
+            ctx.fillStyle = '#0f5';
+            ctx.beginPath();
+            ctx.arc(base.x, base.y, base.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#052';
+            ctx.beginPath();
+            ctx.arc(base.x, base.y, base.radius - 10, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw Eggs in Base
+            ctx.fillStyle = '#ff0';
+            for(let i=0; i<base.eggs; i++) {
+                ctx.beginPath();
+                ctx.arc(base.x - 15 + (i%3)*15, base.y - 15 + Math.floor(i/3)*15, 6, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw Dropped Eggs
+            droppedEggs.forEach(egg => {
+                ctx.fillStyle = '#ff0';
+                ctx.beginPath();
+                ctx.arc(egg.x, egg.y, 7, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            });
+
+            // Draw Enemies
+            enemies.forEach(e => {
+                ctx.fillStyle = e.color;
+                ctx.beginPath();
+                ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Show HP
+                if (e.hp < e.maxHp || e.isBoss) {
+                    ctx.fillStyle = '#000';
+                    ctx.font = '10px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(e.hp, e.x, e.y);
+                }
+
+                if (e.hasEgg) {
+                    ctx.fillStyle = '#ff0';
+                    ctx.beginPath();
+                    ctx.arc(e.x, e.y - e.radius + 2, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+
+            // Draw Bullets
+            ctx.fillStyle = '#0df';
+            bullets.forEach(b => {
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw Player
+            ctx.fillStyle = '#0df';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw Carried Eggs
+            if (player.eggsCarried > 0) {
+                ctx.fillStyle = '#ff0';
+                for(let i=0; i<player.eggsCarried; i++) {
+                    ctx.beginPath();
+                    ctx.arc(player.x, player.y - 12 - (i * 6), 6, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#222';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+            }
+            
+            // Draw Range Indicator
+            if ((gameState === 'PLAYING' || gameState === 'TRANSITION')) {
+                ctx.strokeStyle = 'rgba(0, 221, 255, 0.08)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, stats.range, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+        
+        loop();
+    </script>
+</body>
+</html>
